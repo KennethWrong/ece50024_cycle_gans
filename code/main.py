@@ -29,8 +29,8 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 
 # TRAINING PARAMETERS
 load = None
-# load = "weights-10-04-2023-01-01"
-epochs = 3
+load = "weights-10-04-2023-10-36"
+epochs = 10
 
 print(device)
 
@@ -48,7 +48,7 @@ model = Solver(
     load= load
 )
 
-model.train(train_images_dataloader, test_images_dataloader, epochs=epochs, save_model=True)
+# model.train(train_images_dataloader, test_images_dataloader, epochs=epochs, save_model=True)
 eval_image = test_images_dataset[random.randint(0, len(test_images_dataset) - 1)]["N"]
 generated_image = model.eval(eval_image.unsqueeze(0)).squeeze()
 

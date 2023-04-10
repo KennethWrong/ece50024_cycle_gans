@@ -31,26 +31,34 @@ class Generator(nn.Module):
         self.conv1 = conv(c_in=input_channel, c_out=16, k_size=2, stride=2, pad=8) # shape: [N, 64, 120, 120]
         self.conv2 = conv(c_in=16, c_out=32, k_size=4, stride=2, pad=1) # shape: [N, 32, 60, 60]
 
-        
         # residual blocks
-        self.conv3 = conv(c_in=32, c_out=16, k_size=2, stride=2, pad=10) # shape: [N, 16, 40, 40]
-        self.conv4 = conv(c_in=16, c_out=1, k_size=2, stride=2, pad=10) # shape: [N, 1, 30, 30]
+        self.conv3 = conv(c_in=32, c_out=16, k_size=3, stride=1, pad=1) # shape: [N, 16, 60, 60]
+        self.conv4 = conv(c_in=16, c_out=1, k_size=4, stride=2, pad=1) # shape: [N, 1, 30, 30]
 
         # Flatten to [N, 900]
 
         # FCNN
-        self.fc1 = nn.Linear(in_features=900, out_features=1600) #shape: [N, 1600]
-        # self.fc2 = nn.Linear(in_features=1600, out_features=3200) #shape: [N, 3200]
-        self.fc3 = nn.Linear(in_features=1600, out_features=4900) #shape: [N, 6400]
-        # Reshape to [N, 1, 70, 70]
+        self.fc1 = nn.Linear(in_features=900, out_features=3600) # shape: [N, 3600]
+
+        # Reshape to [N, 1, 60, 60]
         
         # decoding blocks
-        self.deconv1 = deconv(c_in=1, c_out=3, k_size=4, stride=2, pad=1) # shape: [N, 3, 160, 160]
+        self.upsample1 = nn.Upsample(scale_factor=2, mode="bilinear") # shape: [N, 1, 120, 120]
+        self.reflection1 = nn.ReflectionPad2d(1) # shape: [N, 1, 122, 122]
+        self.deconv1 = conv(c_in=1, c_out=2, k_size=3, stride=1, pad=1) # shape: [n, 2, 122, 122]
 
-        # Upsample
-        self.upsample1 = torch.nn.Upsample(scale_factor=1.6, mode="bilinear") # shape: [N, 3, 224, 224]
+        self.upsample2 = nn.Upsample(scale_factor=1.5, mode="bilinear") #shape: [N, 2, 183, 183]
+        self.reflection2 = nn.ReflectionPad2d(2) #shape: [N, 2, 185, 185]
+        self.deconv2 = conv(c_in=2, c_out=3, k_size=3, stride=1, pad=1) # shape: [n, 3, 185, 185]
+
+        self.upsample3 = nn.Upsample(scale_factor=1.2, mode="bilinear") # shape: [n, 3, 222, 222]
+        self.reflection3 = nn.ReflectionPad2d(1) #shape: [N, 3, 224, 224]
+        self.deconv3 = conv(c_in=3, c_out=3, k_size=3, stride=1, pad=0) # shape: [n, 3, 224, 224]
+
         
+
     def forward(self, x):
+        # ENCODING
         out = F.leaky_relu(self.conv1(x), 0.1)      
         out = F.leaky_relu(self.conv2(out), 0.1)    
         out = F.leaky_relu(self.conv3(out), 0.1)    
@@ -59,15 +67,23 @@ class Generator(nn.Module):
         out = torch.flatten(out, start_dim=1, end_dim=-1)
 
         out = F.leaky_relu(self.fc1(out), 0.1) 
-        # out = F.leaky_relu(self.fc2(out), 0.1)
-        out = F.leaky_relu(self.fc3(out), 0.1)
         
-        out = torch.reshape(out, (-1, 1, 70, 70)) 
+        out = torch.reshape(out, (-1, 1, 60, 60)) 
         
-        out = F.leaky_relu(self.deconv1(out), 0.1)  
-        # out = F.leaky_relu(self.deconv2(out), 0.1)  
+        # DECODING
+        out = self.upsample1(out)
+        out = self.reflection1(out)
+        out = F.leaky_relu(self.deconv1(out), 0.1)
+        
+        out = self.upsample2(out)
+        out = self.reflection2(out)
+        out = F.leaky_relu(self.deconv2(out), 0.1)
 
-        out = torch.tanh(self.upsample1(out))          
+        out = self.upsample3(out)
+        out = self.reflection3(out)
+        
+        out = torch.tanh(self.deconv3(out))
+
         # print(f"After deconv2: {out.shape}")
 
         return out
