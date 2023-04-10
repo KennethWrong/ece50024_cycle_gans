@@ -3,9 +3,17 @@ from torch.utils.data import DataLoader
 import torch
 import matplotlib.pyplot as plt
 import os
+import numpy as np
 from solver import Solver
 
+import random
+
 cwd = os.path.dirname(os.path.realpath(__file__))
+
+
+import gc
+gc.collect()
+torch.cuda.empty_cache()
 
 # Can change to num_gpu * 4
 num_workers = 0
@@ -18,6 +26,14 @@ test_images_dataloader = DataLoader(test_images_dataset, 16, True, num_workers=n
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
+
+# TRAINING PARAMETERS
+load = None
+# load = "weights-10-04-2023-01-01"
+epochs = 3
+
+print(device)
+
 # Setting up our model
 criterion_GAN = torch.nn.MSELoss()
 criterion_cycle = torch.nn.L1Loss()
@@ -28,16 +44,21 @@ model = Solver(
     criterion_GAN=criterion_GAN,
     criterion_identity=criterion_identity,
     input_shape= train_images_dataset[0]["M"].size(),
-    device = device
+    device = device,
+    load= load
 )
 
-model.train(train_images_dataloader, 1)
+model.train(train_images_dataloader, test_images_dataloader, epochs=epochs, save_model=True)
+eval_image = test_images_dataset[random.randint(0, len(test_images_dataset) - 1)]["N"]
+generated_image = model.eval(eval_image.unsqueeze(0)).squeeze()
+
+# print(eval_image)
+# print(generated_image)
 
 # Test print image
-# dic = train_images_dataset[0]
-# monet_test = dic['M'].permute(1, 2, 0)
-# nature_test = dic['N'].permute(1, 2, 0)
-# f, axarr = plt.subplots(2, 1)
-# axarr[0].imshow(monet_test)
-# axarr[1].imshow(nature_test)
-# plt.show()
+generated_image = (generated_image * 255).to(torch.uint8)
+plot_image = generated_image.permute(1, 2, 0)
+f, axarr = plt.subplots(2, 1)
+axarr[0].imshow(plot_image)
+axarr[1].imshow(eval_image.permute(1, 2, 0))
+plt.show()

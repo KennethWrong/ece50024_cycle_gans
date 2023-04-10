@@ -23,10 +23,10 @@ class ImageDataset(Dataset):
         self.nature_images = sorted(glob.glob(os.path.join(root, f"{mode}_nature") + "/*.*"))
         self.paired = paired
         self.transform = tv.transforms.Compose([
-            tv.transforms.Resize(int(self.img_height * 1.12), cv2.INTER_CUBIC),
+            tv.transforms.Resize(int(self.img_height * 1.12), cv2.INTER_CUBIC, antialias=True),
             tv.transforms.RandomCrop((self.img_height, self.img_width)),
-            tv.transforms.RandomHorizontalFlip(),
-            tv.transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+            # tv.transforms.RandomHorizontalFlip(),
+            # tv.transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
         ])
 
     

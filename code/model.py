@@ -1,103 +1,96 @@
 import torch.nn as nn
 import torch.nn.functional as F
 import torch
-from torchsummary import summary
 
-class ResidualBlock(nn.Module):
-    def __init__(self, in_features):
-        super(ResidualBlock, self).__init__()
 
-        self.block = nn.Sequential(
-            nn.ReflectionPad2d(1),
-            nn.Conv2d(in_features, in_features, 3),
-            nn.InstanceNorm2d(in_features),
-            nn.ReLU(inplace=True),
-            nn.ReflectionPad2d(1),
-            nn.Conv2d(in_features, in_features, 3),
-            nn.InstanceNorm2d(in_features),
-        )
+def deconv(c_in, c_out, k_size, stride=2, pad=1, output_pad=0, bn=True):
+    """Custom deconvolutional layer for simplicity."""
+    layers = []
+    layers.append(nn.ConvTranspose2d(c_in, c_out, k_size, stride, pad, output_padding=output_pad, bias=False))
+    if bn:
+        layers.append(nn.BatchNorm2d(c_out))
+    return nn.Sequential(*layers)
 
-    def forward(self, x):
-        return x + self.block(x)
+def conv(c_in, c_out, k_size, stride=2, pad=1, bn=True):
+    """Custom convolutional layer for simplicity."""
+    layers = []
+    layers.append(nn.Conv2d(c_in, c_out, k_size, stride, pad, bias=False))
+    if bn:
+        layers.append(nn.BatchNorm2d(c_out))
+    return nn.Sequential(*layers)
 
 class Generator(nn.Module):
-    def __init__(self, input_shape, num_residual_blocks):
+    """Generator for transfering from mnist to svhn"""
+    def __init__(self, input_shape):
         super(Generator, self).__init__()
-        self.channels = input_shape[0]
-
-        out_features = 64
+        # encoding blocks
+        input_channel , input_width, input_height = input_shape
         
-        model = [
-            nn.ReflectionPad2d(self.channels),
-            nn.Conv2d(self.channels, out_features, 7),
-            nn.InstanceNorm2d(out_features),
-            nn.ReLU(inplace=True)
-        ]
-
-        in_features = out_features
-
-        # Downsampling
-        for _ in range(2):
-            out_features *= 2
-            model += [
-                nn.Conv2d(in_features, out_features, 3, stride=2, padding=1),
-                nn.InstanceNorm2d(out_features),
-                nn.ReLU(inplace=True)
-            ]
-            in_features = out_features
+        # input shape: [N, 3, 224, 224]
         
-        # Residual blocks
-        for _ in range(num_residual_blocks):
-            model += [ResidualBlock(out_features)]
+        self.conv1 = conv(c_in=input_channel, c_out=16, k_size=2, stride=2, pad=8) # shape: [N, 64, 120, 120]
+        self.conv2 = conv(c_in=16, c_out=32, k_size=4, stride=2, pad=1) # shape: [N, 32, 60, 60]
 
-        # Upsampling
-        for _ in range(2):
-            out_features //= 2
-            model += [
-                nn.Upsample(scale_factor=2),
-                nn.Conv2d(in_features, out_features, 3, stride=1, padding=1),
-                nn.InstanceNorm2d(out_features),
-                nn.ReLU(inplace=True),
-            ]
-            in_features = out_features
+        
+        # residual blocks
+        self.conv3 = conv(c_in=32, c_out=16, k_size=2, stride=2, pad=10) # shape: [N, 16, 40, 40]
+        self.conv4 = conv(c_in=16, c_out=1, k_size=2, stride=2, pad=10) # shape: [N, 1, 30, 30]
 
-        # Output layer
-        model += [nn.ReflectionPad2d(self.channels), nn.Conv2d(out_features, self.channels, 7), nn.Tanh()]
-        self.model = nn.Sequential(*model)
+        # Flatten to [N, 900]
 
-        # print(self.model)
-        # summary(self.model)
+        # FCNN
+        self.fc1 = nn.Linear(in_features=900, out_features=1600) #shape: [N, 1600]
+        # self.fc2 = nn.Linear(in_features=1600, out_features=3200) #shape: [N, 3200]
+        self.fc3 = nn.Linear(in_features=1600, out_features=4900) #shape: [N, 6400]
+        # Reshape to [N, 1, 70, 70]
+        
+        # decoding blocks
+        self.deconv1 = deconv(c_in=1, c_out=3, k_size=4, stride=2, pad=1) # shape: [N, 3, 160, 160]
+
+        # Upsample
+        self.upsample1 = torch.nn.Upsample(scale_factor=1.6, mode="bilinear") # shape: [N, 3, 224, 224]
         
     def forward(self, x):
-        return self.model(x)
+        out = F.leaky_relu(self.conv1(x), 0.1)      
+        out = F.leaky_relu(self.conv2(out), 0.1)    
+        out = F.leaky_relu(self.conv3(out), 0.1)    
+        out = F.leaky_relu(self.conv4(out), 0.1)    
 
+        out = torch.flatten(out, start_dim=1, end_dim=-1)
 
+        out = F.leaky_relu(self.fc1(out), 0.1) 
+        # out = F.leaky_relu(self.fc2(out), 0.1)
+        out = F.leaky_relu(self.fc3(out), 0.1)
+        
+        out = torch.reshape(out, (-1, 1, 70, 70)) 
+        
+        out = F.leaky_relu(self.deconv1(out), 0.1)  
+        # out = F.leaky_relu(self.deconv2(out), 0.1)  
+
+        out = torch.tanh(self.upsample1(out))          
+        # print(f"After deconv2: {out.shape}")
+
+        return out
 
 class Discriminator(nn.Module):
-    def __init__(self, input_shape):
+    """Discriminator for svhn."""
+    def __init__(self, input_shape, conv_dim=64):
         super(Discriminator, self).__init__()
+        conv_dim = 64
 
-        channels, height, width = input_shape
+        # input shape: [N, 3, 224, 224]
 
-        # Calculate output shape of image discriminator (PatchGAN)
-        self.output_shape = (1, height // 2 ** 4, width // 2 ** 4)
-
-        def discriminator_block(in_filters, out_filters, normalize=True):
-            """Returns downsampling layers of each discriminator block"""
-            layers = [nn.Conv2d(in_filters, out_filters, 4, stride=2, padding=1)]
-            if normalize:
-                layers.append(nn.InstanceNorm2d(out_filters))
-            layers.append(nn.LeakyReLU(0.2, inplace=True))
-            return layers
-
-        self.model = nn.Sequential(
-            *discriminator_block(channels, 64, normalize=False),
-            *discriminator_block(64, 128),
-            *discriminator_block(128, 256),
-            *discriminator_block(256, 512),
-            nn.ZeroPad2d((1, 0, 1, 0)),
-            nn.Conv2d(512, 1, 4, padding=1)
-        )
-
-    def forward(self, img):
-        return self.model(img)
+        self.conv1 = conv(c_in= 3, c_out= conv_dim, k_size= 4, stride= 2, pad= 1 ,bn= False) #[N, 64, 112, 112]
+        self.conv2 = conv(c_in= conv_dim, c_out= 2*conv_dim, k_size= 4, stride= 2, pad= 1 ,bn= False) #[N, 64, 56, 56]
+        self.conv3 = conv(c_in= 2*conv_dim, c_out= 4*conv_dim, k_size= 4, stride= 2, pad= 1 ,bn= False) #[N, 64, 28, 28]
+        self.conv4 = conv(c_in= 4*conv_dim, c_out= 4*conv_dim, k_size= 6, stride= 4, pad= 3 ,bn= False) #[N, 64, 8, 8]
+        self.fc = conv(conv_dim*4, 1, 8, 2, 0, False) #[N, 1, 1, 1]
+        
+    def forward(self, x):
+        out = F.leaky_relu(self.conv1(x), 0.2)    
+        out = F.leaky_relu(self.conv2(out), 0.2) 
+        out = F.leaky_relu(self.conv3(out), 0.2) 
+        out = F.leaky_relu(self.conv4(out), 0.2) 
+        out = self.fc(out).squeeze()
+        out = out.unsqueeze(1)
+        return out
