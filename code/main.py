@@ -29,7 +29,7 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 
 # TRAINING PARAMETERS
 load = None
-load = "weights-10-04-2023-10-36"
+load = "weights-11-04-2023-00-31"
 epochs = 10
 
 print(device)
