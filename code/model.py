@@ -2,111 +2,145 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch
 
-
-def deconv(c_in, c_out, k_size, stride=2, pad=1, output_pad=0, bn=True):
-    """Custom deconvolutional layer for simplicity."""
+def conv(c_in, c_out, k_size, stride=1, pad=0, bn=True):
     layers = []
-    layers.append(nn.ConvTranspose2d(c_in, c_out, k_size, stride, pad, output_padding=output_pad, bias=False))
+    layers.append(nn.Conv2d(c_in, c_out, k_size, stride, pad, bias=True))
     if bn:
         layers.append(nn.BatchNorm2d(c_out))
-    return nn.Sequential(*layers)
+    return layers
 
-def conv(c_in, c_out, k_size, stride=2, pad=1, bn=True):
-    """Custom convolutional layer for simplicity."""
-    layers = []
-    layers.append(nn.Conv2d(c_in, c_out, k_size, stride, pad, bias=False))
-    if bn:
-        layers.append(nn.BatchNorm2d(c_out))
-    return nn.Sequential(*layers)
+
+# Residual block w/ 2 3x3 conv layers with same # of filters on both layers
+class ResidualBlock(nn.Module):
+    def __init__(self, in_channel):
+        super(ResidualBlock, self).__init__()
+
+        self.res_block = nn.Sequential(
+            nn.ReflectionPad2d(1),
+            *conv(c_in=in_channel, c_out=in_channel, k_size=3),
+            # nn.Conv2d(in_channels=in_channel, out_channels=in_channel, kernel_size=3),
+            nn.InstanceNorm2d(num_features= in_channel),
+            nn.ReLU(inplace=True),
+            nn.ReflectionPad2d(1),
+            *conv(c_in=in_channel, c_out=in_channel, k_size=3),
+            # nn.Conv2d(in_channels=in_channel, out_channels=in_channel, kernel_size=3),
+            nn.InstanceNorm2d(num_features= in_channel)
+        )
+    
+    def forward(self, input):
+        return self.res_block(input) + input
+
+# 7x7 Convolution, InstanceNorm,, ReLU layer w k filters and stride 1
+class C7S1_K(nn.Module):
+    def __init__(self, in_channel, out_channel):
+        super(C7S1_K, self).__init__()
+
+        self.block = nn.Sequential(
+            nn.ReflectionPad2d(in_channel),
+            nn.Conv2d(in_channels=in_channel, out_channels=out_channel, kernel_size=7),
+            nn.InstanceNorm2d(num_features= out_channel),
+            nn.ReLU(inplace=True)
+        )
+    
+    def forward(self, input):
+        return self.block(input)
+
+# 3x3 Convolution, InstanceNorm, ReLU layer w/ k filters and stride 2
+class D_K(nn.Module):
+    def __init__(self, in_channel, out_channel):
+        super(D_K, self).__init__()
+
+        self.block = nn.Sequential(
+            nn.Conv2d(in_channels=in_channel, out_channels=out_channel, kernel_size=3, stride=2, padding=1),
+            nn.InstanceNorm2d(num_features= out_channel),
+            nn.ReLU(inplace=True)
+        )
+    
+    def forward(self, input):
+        return self.block(input)
+
+class U_K(nn.Module):
+    def __init__(self, in_channel, out_channel):
+        super(U_K, self).__init__()
+
+        self.block = nn.Sequential(
+            nn.Upsample(scale_factor=2),
+            nn.Conv2d(in_channels=in_channel, out_channels=out_channel, kernel_size=3, stride=1, padding=1),
+            nn.InstanceNorm2d(num_features= out_channel),
+            nn.ReLU(inplace=True)
+        )
+    
+    def forward(self, input):
+        return self.block(input)
+
 
 class Generator(nn.Module):
     """Generator for transfering from mnist to svhn"""
-    def __init__(self, input_shape):
+    def __init__(self, input_shape, num_residual_blocks = 9):
         super(Generator, self).__init__()
         # encoding blocks
         input_channel , input_width, input_height = input_shape
+
+        model = [
+            C7S1_K(in_channel=3, out_channel=64),
+            D_K(in_channel=64, out_channel= 128),
+            D_K(in_channel=128, out_channel= 256)
+        ]
         
-        # input shape: [N, 3, 224, 224]
+        for _ in range(num_residual_blocks):
+            model += [ResidualBlock(in_channel= 256)]
         
-        self.conv1 = conv(c_in=input_channel, c_out=16, k_size=2, stride=2, pad=8) # shape: [N, 64, 120, 120]
-        self.conv2 = conv(c_in=16, c_out=32, k_size=4, stride=2, pad=1) # shape: [N, 32, 60, 60]
-
-        # residual blocks
-        self.conv3 = conv(c_in=32, c_out=16, k_size=3, stride=1, pad=1) # shape: [N, 16, 60, 60]
-        self.conv4 = conv(c_in=16, c_out=1, k_size=4, stride=2, pad=1) # shape: [N, 1, 30, 30]
-
-        # Flatten to [N, 900]
-
-        # FCNN
-        self.fc1 = nn.Linear(in_features=900, out_features=3600) # shape: [N, 3600]
-
-        # Reshape to [N, 1, 60, 60]
         
-        # decoding blocks
-        self.upsample1 = nn.Upsample(scale_factor=2, mode="bilinear") # shape: [N, 1, 120, 120]
-        self.reflection1 = nn.ReflectionPad2d(1) # shape: [N, 1, 122, 122]
-        self.deconv1 = conv(c_in=1, c_out=2, k_size=3, stride=1, pad=1) # shape: [n, 2, 122, 122]
-
-        self.upsample2 = nn.Upsample(scale_factor=1.5, mode="bilinear") #shape: [N, 2, 183, 183]
-        self.reflection2 = nn.ReflectionPad2d(2) #shape: [N, 2, 185, 185]
-        self.deconv2 = conv(c_in=2, c_out=3, k_size=3, stride=1, pad=1) # shape: [n, 3, 185, 185]
-
-        self.upsample3 = nn.Upsample(scale_factor=1.2, mode="bilinear") # shape: [n, 3, 222, 222]
-        self.reflection3 = nn.ReflectionPad2d(1) #shape: [N, 3, 224, 224]
-        self.deconv3 = conv(c_in=3, c_out=3, k_size=3, stride=1, pad=0) # shape: [n, 3, 224, 224]
-
+        model += [
+           U_K(in_channel=256, out_channel=128),
+           U_K(in_channel=128, out_channel=64),
+        ]
         
-
-    def forward(self, x):
-        # ENCODING
-        out = F.leaky_relu(self.conv1(x), 0.1)      
-        out = F.leaky_relu(self.conv2(out), 0.1)    
-        out = F.leaky_relu(self.conv3(out), 0.1)    
-        out = F.leaky_relu(self.conv4(out), 0.1)    
-
-        out = torch.flatten(out, start_dim=1, end_dim=-1)
-
-        out = F.leaky_relu(self.fc1(out), 0.1) 
+        model += [
+            nn.ReflectionPad2d(3),
+            nn.Conv2d(in_channels=64, out_channels=3, kernel_size=7),
+            nn.Tanh()
+        ]
         
-        out = torch.reshape(out, (-1, 1, 60, 60)) 
-        
-        # DECODING
-        out = self.upsample1(out)
-        out = self.reflection1(out)
-        out = F.leaky_relu(self.deconv1(out), 0.1)
-        
-        out = self.upsample2(out)
-        out = self.reflection2(out)
-        out = F.leaky_relu(self.deconv2(out), 0.1)
+        self.model = nn.Sequential(*model)
 
-        out = self.upsample3(out)
-        out = self.reflection3(out)
-        
-        out = torch.tanh(self.deconv3(out))
+    def forward(self, input):
+        return self.model(input)
 
-        # print(f"After deconv2: {out.shape}")
 
-        return out
+def discriminator_block(c_in, c_out, normal=False):
+    layers = []
+    layers += [nn.Conv2d(c_in, c_out, kernel_size=4, stride=2, padding=1)]
+    
+    if normal:
+        layers += [nn.InstanceNorm2d(c_out)] 
+    layers += [nn.LeakyReLU(0.2, inplace=True)]
+    return layers
 
+'''
+The idea behind this Discriminator is that instead of the traditional GANS generator that outputs a binary classifaction
+of real or fake. PatchGan outputs a matrix of 0s and 1s to determine which patch is real and which patch is fake.
+
+Then based on this we compare it to the true/false labels (matrix of 0s and 1s of same size) to calculate loss.
+'''
 class Discriminator(nn.Module):
-    """Discriminator for svhn."""
-    def __init__(self, input_shape, conv_dim=64):
+    def __init__(self, input_shape):
         super(Discriminator, self).__init__()
-        conv_dim = 64
 
-        # input shape: [N, 3, 224, 224]
+        channels, height, width = input_shape
 
-        self.conv1 = conv(c_in= 3, c_out= conv_dim, k_size= 4, stride= 2, pad= 1 ,bn= False) #[N, 64, 112, 112]
-        self.conv2 = conv(c_in= conv_dim, c_out= 2*conv_dim, k_size= 4, stride= 2, pad= 1 ,bn= False) #[N, 64, 56, 56]
-        self.conv3 = conv(c_in= 2*conv_dim, c_out= 4*conv_dim, k_size= 4, stride= 2, pad= 1 ,bn= False) #[N, 64, 28, 28]
-        self.conv4 = conv(c_in= 4*conv_dim, c_out= 4*conv_dim, k_size= 6, stride= 4, pad= 3 ,bn= False) #[N, 64, 8, 8]
-        self.fc = conv(conv_dim*4, 1, 8, 2, 0, False) #[N, 1, 1, 1]
-        
-    def forward(self, x):
-        out = F.leaky_relu(self.conv1(x), 0.2)    
-        out = F.leaky_relu(self.conv2(out), 0.2) 
-        out = F.leaky_relu(self.conv3(out), 0.2) 
-        out = F.leaky_relu(self.conv4(out), 0.2) 
-        out = self.fc(out).squeeze()
-        out = out.unsqueeze(1)
-        return out
+        # Output dimensions of PatchGAN
+        self.output_shape = (1, height // 2 ** 4, width // 2 ** 4)
+
+        # C64 -> C128 -> C256 -> C512
+        self.model = nn.Sequential(
+            *discriminator_block(channels, c_out=64),
+            *discriminator_block(64, c_out=128, normal=True),
+            *discriminator_block(128, c_out=256, normal=True),
+            *discriminator_block(256, c_out=512, normal= True),
+            nn.ZeroPad2d((1, 0, 1, 0)),
+            nn.Conv2d(in_channels=512, out_channels=1, kernel_size=4, padding=1)
+        )
+
+    def forward(self, img):
+        return self.model(img)

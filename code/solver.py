@@ -40,8 +40,8 @@ class Solver():
         self.criterion_cycle = criterion_cycle.to(device)
         self.criterion_identity = criterion_identity.to(device)
 
-        self.GeneratorMN = Generator(input_shape=input_shape).to(device)
-        self.GeneratorNM = Generator(input_shape=input_shape).to(device)
+        self.GeneratorMN = Generator(input_shape=input_shape, num_residual_blocks=3).to(device)
+        self.GeneratorNM = Generator(input_shape=input_shape, num_residual_blocks=3).to(device)
 
         self.DiscriminatorM = Discriminator(input_shape=input_shape).to(device)
         self.DiscriminatorN = Discriminator(input_shape=input_shape).to(device)
@@ -57,6 +57,7 @@ class Solver():
             itertools.chain(self.GeneratorMN.parameters(), self.GeneratorNM.parameters()),
             lr = self.lr, betas=(self.b1, self.b2)
             )
+        
         self.optimizer_D_M = torch.optim.Adam(self.DiscriminatorM.parameters(), lr=self.lr, betas=(self.b1, self.b2))
         self.optimizer_D_N = torch.optim.Adam(self.DiscriminatorN.parameters(), lr=self.lr, betas=(self.b1, self.b2))
 
@@ -73,11 +74,22 @@ class Solver():
             # Send data to target device
             monet_real, nature_real = batch["M"].to(self.device), batch["N"].to(self.device)
 
-            true_labels = torch.Tensor(np.ones((monet_real.size(0), 1)))
-            true_labels = Variable(true_labels, requires_grad=False).to(self.device)
+            # true_labels = torch.Tensor(np.ones((monet_real.size(0), 1)))
+            # true_labels = Variable(true_labels, requires_grad=False).to(self.device)
 
-            false_labels = torch.Tensor(np.zeros((monet_real.size(0), 1)))
-            false_labels = Variable(false_labels, requires_grad=False).to(self.device)
+            # false_labels = torch.Tensor(np.zeros((monet_real.size(0), 1)))
+            # false_labels = Variable(false_labels, requires_grad=False).to(self.device)
+            true_labels = Variable(
+                torch.Tensor(np.ones((monet_real.size(0), *self.DiscriminatorM.output_shape))),
+                requires_grad=False,
+            )
+            false_labels = Variable(
+                torch.Tensor(np.zeros((monet_real.size(0), *self.DiscriminatorM.output_shape))),
+                requires_grad=False,
+            )
+
+            true_labels = true_labels.to(self.device)
+            false_labels = false_labels.to(self.device)
 
             #TRAINING GENERATOR
             self.GeneratorMN.train()
@@ -316,22 +328,6 @@ class Solver():
         for epoch in tqdm(range(epochs)):
             self.train_step( dataloader=train_dataloader, epoch=epoch+1, results=train_results)
 
-            # self.test_step(dataloader=test_dataloader, epoch=epoch+1, results=test_results)
-
-            # Print out what's happening
-            # print(
-            #     f"Epoch: {epoch+1} | "
-            #     f"train_loss: {train_loss:.4f} | "
-            #     f"train_acc: {train_acc:.4f} | "
-            #     f"test_loss: {test_loss:.4f} | "
-            #     f"test_acc: {test_acc:.4f}"
-            # )
-
-            # # Update results dictionary
-            # results["train_loss"].append(train_loss)
-            # results["train_acc"].append(train_acc)
-            # results["test_loss"].append(test_loss)
-            # results["test_acc"].append(test_acc)
             if save_model:
                 self.save_discriminator("monet")
                 self.save_discriminator("nature")
