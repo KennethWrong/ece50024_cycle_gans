@@ -15,12 +15,12 @@ import random
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 class ImageDataset(Dataset):
-    def __init__(self, root, mode, paired=False):
+    def __init__(self, root, mode, to_dataset, from_dataset, paired=False):
 
-        self.monet_images = sorted(glob.glob(os.path.join(root, f"{mode}_monet") + "/*.*"))
+        self.monet_images = sorted(glob.glob(os.path.join(root, to_dataset,f"{mode}_{to_dataset}") + "/*.*"))
         self.img_height = 224
         self.img_width = 224
-        self.nature_images = sorted(glob.glob(os.path.join(root, f"{mode}_nature") + "/*.*"))
+        self.nature_images = sorted(glob.glob(os.path.join(root, from_dataset, f"{mode}_{from_dataset}") + "/*.*"))
         self.paired = paired
         self.transform = tv.transforms.Compose([
             tv.transforms.Resize(int(self.img_height * 1.12), cv2.INTER_CUBIC, antialias=True),
@@ -32,12 +32,6 @@ class ImageDataset(Dataset):
     
     # 1. we got to load the images from .jpg to PIL image or np.array
     def load_image(self, filename):
-        # image = Image.open(filename)
-        # image.show()
-        # image = image.convert('RGB')
-        # transform = tv.transforms.PILToTensor()
-        # image = transform(image)
-
         image = cv2.imread(filename)
         transform = tv.transforms.ToTensor()
         image = transform(image)
@@ -47,7 +41,7 @@ class ImageDataset(Dataset):
     
     
     def __len__(self):
-        return max(len(self.monet_images), len(self.nature_images))
+        return min(len(self.monet_images), len(self.nature_images))
     
     def __getitem__(self, idx):
         monet_image = self.load_image(self.monet_images[idx % len(self.monet_images)])

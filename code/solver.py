@@ -10,24 +10,37 @@ import datetime
 import os
 
 import matplotlib.pyplot as plt
+    
 
-def format_file_name(dir):
+def format_file_name(dir, dataset_name):
     today = datetime.datetime.now()
     filename = today.strftime("%d-%m-%Y-%H-%M")
 
     filename = f"weights-{filename}"
     cwd = os.path.dirname(os.path.realpath(__file__))
 
-    weight_path = os.path.join(cwd, "weights", dir, filename)
+    parent_directory_path = os.path.join(cwd, "weights", dataset_name)
+    
+    if not os.path.isdir(parent_directory_path):
+        print(parent_directory_path)
+        os.makedirs(parent_directory_path)
+    
+    child_directory_path = os.path.join(parent_directory_path, dir)
+
+    if not os.path.isdir(child_directory_path):
+        print(child_directory_path)
+        os.makedirs(child_directory_path)
+
+    weight_path = os.path.join(cwd, "weights", dataset_name, dir, filename)
     return weight_path
 
 class Solver():
-    def __init__(self, criterion_GAN, criterion_cycle, criterion_identity, device, input_shape, load=None):
+    def __init__(self, criterion_GAN, criterion_cycle, criterion_identity, device, input_shape, dataset_name,load=None, from_dataset_name="nature"):
         self.device = device
         self.input_shape = input_shape
 
         # Hyper parameters
-        self.lr = 0.00012
+        self.lr = 0.0002
         self.batch_size = 4
         self.b1 = 0.5
         self.b2 = 0.999
@@ -35,11 +48,12 @@ class Solver():
         self.n_workers = 8
         self.lambda_cyc = 10.0
         self.lambda_id = 5.0
+        self.dataset_name = dataset_name
+        self.from_dataset_name = from_dataset_name
 
         self.criterion_GAN = criterion_GAN.to(device)
         self.criterion_cycle = criterion_cycle.to(device)
         self.criterion_identity = criterion_identity.to(device)
-
         self.GeneratorMN = Generator(input_shape=input_shape, num_residual_blocks=3).to(device)
         self.GeneratorNM = Generator(input_shape=input_shape, num_residual_blocks=3).to(device)
 
@@ -47,10 +61,10 @@ class Solver():
         self.DiscriminatorN = Discriminator(input_shape=input_shape).to(device)
 
         if load:
-            self.load_weights(self.GeneratorMN, "generator_nature", load)
-            self.load_weights(self.GeneratorNM, "generator_monet", load)
-            self.load_weights(self.DiscriminatorN, "discriminator_nature", load)
-            self.load_weights(self.DiscriminatorM, "discriminator_monet", load)
+            self.load_weights(self.GeneratorMN, f"generator_{self.from_dataset_name}", load)
+            self.load_weights(self.GeneratorNM, f"generator_{dataset_name}", load)
+            self.load_weights(self.DiscriminatorN, f"discriminator_{from_dataset_name}", load)
+            self.load_weights(self.DiscriminatorM, f"discriminator_{dataset_name}", load)
 
         
         self.optimizer_G = torch.optim.Adam(
@@ -74,11 +88,6 @@ class Solver():
             # Send data to target device
             monet_real, nature_real = batch["M"].to(self.device), batch["N"].to(self.device)
 
-            # true_labels = torch.Tensor(np.ones((monet_real.size(0), 1)))
-            # true_labels = Variable(true_labels, requires_grad=False).to(self.device)
-
-            # false_labels = torch.Tensor(np.zeros((monet_real.size(0), 1)))
-            # false_labels = Variable(false_labels, requires_grad=False).to(self.device)
             true_labels = Variable(
                 torch.Tensor(np.ones((monet_real.size(0), *self.DiscriminatorM.output_shape))),
                 requires_grad=False,
@@ -174,12 +183,12 @@ class Solver():
             loss_disc_m += loss_d_m.item()
             loss_disc_n += loss_d_n.item()
             
-            results["g_total_loss"].append(loss_gen)
-            results["g_identity_loss"].append(loss_id)
-            results["cycle_loss"].append(loss_cyc)
-            results["d_total_loss"].append(loss_disc)
-            results["d_m_loss"].append(loss_disc_m)
-            results["d_n_loss"].append(loss_disc_n)
+            results["g_total_loss"].append(loss_gen / (batch_idx + 1))
+            results["g_identity_loss"].append(loss_id / (batch_idx + 1))
+            results["cycle_loss"].append(loss_cyc / (batch_idx + 1))
+            results["d_total_loss"].append(loss_disc / (batch_idx + 1))
+            results["d_m_loss"].append(loss_disc_m / (batch_idx + 1))
+            results["d_n_loss"].append(loss_disc_n / (batch_idx + 1))
             
             tqdm_bar.set_postfix(Gen_loss=loss_gen / (batch_idx + 1),
                                  identity = loss_id / (batch_idx + 1),
@@ -190,17 +199,8 @@ class Solver():
                                  d_n_loss = loss_disc_n / (batch_idx + 1)
                                  )
         
-            # if (batch_idx % 50 == 0):
-                # print(f"Epoch: {epoch} [{batch_idx*len(test_pred_labels)}/{len(dataloader)*len(test_pred_labels)}] total_train_acc: {test_acc / (batch_idx + 1)}")
-
-        # Adjust metrics to get average loss and accuracy per batch 
-        # test_loss = test_loss / len(dataloader)
-        # test_acc = test_acc / len(dataloader)
-        # return test_loss, test_acc
-    
     def test_step(self, dataloader, epoch, results):
         # Setup test loss and test accuracy values
-        test_loss, test_acc = 0, 0
         loss_gen = loss_id = loss_gan = loss_cyc = 0.0
         loss_disc = loss_disc_m = loss_disc_n = 0.0
 
@@ -282,12 +282,12 @@ class Solver():
             loss_disc_m += loss_d_m.item()
             loss_disc_n += loss_d_n.item()
 
-            results["g_total_loss"].append(loss_gen)
-            results["g_identity_loss"].append(loss_id)
-            results["cycle_loss"].append(loss_cyc)
-            results["d_total_loss"].append(loss_disc)
-            results["d_m_loss"].append(loss_disc_m)
-            results["d_n_loss"].append(loss_disc_n)
+            results["g_total_loss"].append(loss_gen / (batch_idx + 1))
+            results["g_identity_loss"].append(loss_id / (batch_idx + 1))
+            results["cycle_loss"].append(loss_cyc / (batch_idx + 1))
+            results["d_total_loss"].append(loss_disc / (batch_idx + 1))
+            results["d_m_loss"].append(loss_disc_m / (batch_idx + 1))
+            results["d_n_loss"].append(loss_disc_n / (batch_idx + 1))
 
             tqdm_bar.set_postfix(Gen_loss=loss_gen / (batch_idx + 1),
                                  identity = loss_id / (batch_idx + 1),
@@ -297,7 +297,7 @@ class Solver():
                                  d_m_loss = loss_disc_m / (batch_idx + 1),
                                  d_n_loss = loss_disc_n / (batch_idx + 1)
                                  )
-    
+   
     def train(self,
           train_dataloader: torch.utils.data.DataLoader, 
           test_dataloader: torch.utils.data.DataLoader,
@@ -327,14 +327,17 @@ class Solver():
         # Loop through training and testing steps for a number of epochs
         for epoch in tqdm(range(epochs)):
             self.train_step( dataloader=train_dataloader, epoch=epoch+1, results=train_results)
+            self.test_step(dataloader=test_dataloader, epoch=epoch+1, results=test_results)
 
             if save_model:
-                self.save_discriminator("monet")
-                self.save_discriminator("nature")
-                self.save_generator("monet")
-                self.save_generator("nature")
+                self.save_discriminator(self.dataset_name)
+                self.save_discriminator(self.from_dataset_name)
+                self.save_generator(self.dataset_name)
+                self.save_generator(self.from_dataset_name)
                 
                 print("Successfully saved")
+        
+        return train_results, test_results
     
     def eval(self, input_image):
         self.GeneratorNM.eval()
@@ -345,27 +348,26 @@ class Solver():
     
     def save_discriminator(self, model_to_save="monet"):
         model = self.DiscriminatorM
-        dir = "discriminator_monet"
+        dir = f"discriminator_{model_to_save}"
         if model_to_save == "nature":
             model = self.DiscriminatorN
-            dir = "discriminator_nature"
         
-        save_path = format_file_name(dir)
+        save_path = format_file_name(dir, self.dataset_name)
         torch.save(model.state_dict(), save_path)
 
     
     def save_generator(self, model_to_save="monet"):
         model = self.GeneratorNM
-        dir = "generator_monet"
+        dir = f"generator_{model_to_save}"
         if model_to_save == "nature":
             model = self.GeneratorMN
-            dir = "generator_nature"
         
-        save_path = format_file_name(dir)
+        save_path = format_file_name(dir, self.dataset_name)
         torch.save(model.state_dict(), save_path)
     
+    # This requires you to have a weights folder
     def load_weights(self, model, dir, filename):
         cwd = os.path.dirname(os.path.realpath(__file__))
-        weight_path = os.path.join(cwd, "weights", dir, filename)
+        weight_path = os.path.join(cwd, "weights", self.dataset_name, dir, filename)
         model.load_state_dict(torch.load(weight_path))
         
